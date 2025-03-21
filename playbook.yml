@@ -1,0 +1,114 @@
+---
+- name: Join Linux Machines to Active Directory Domain
+  hosts: linux
+  become: yes
+
+  vars:
+    ad_domain: sherwin.local
+    ad_user: devops
+    ad_password: P@ssw0rd
+
+  tasks:
+    - name: Install required packages for AD integration
+      apt:
+        name:
+          - realmd
+          - libnss-sss
+          - libpam-sss
+          - sssd
+          - sssd-tools
+          - adcli
+          - samba-common-bin
+          - oddjob
+          - oddjob-mkhomedir
+          - packagekit
+        state: present
+        update_cache: yes
+
+    - name: Set the system hostname
+      hostname:
+        name: "{{ inventory_hostname }}.sherwin.local"
+
+    - name: Disable and stop systemd-resolved service
+      systemd:
+        name: systemd-resolved
+        state: stopped
+        enabled: no
+
+    - name: Add DNS servers to /etc/resolv.conf
+      lineinfile:
+        path: /etc/resolv.conf
+        line: "nameserver 192.168.2.200"
+        state: present
+
+    - name: Add hostname to /etc/hosts dynamically
+      lineinfile:
+        path: /etc/hosts
+        line: "{{ ansible_default_ipv4.address }} {{ inventory_hostname }}.sherwin.local {{ inventory_hostname }}"
+        state: present
+
+    - name: Join the AD domain
+      shell: echo '{{ ad_password }}'| realm join --verbose --user={{ ad_user }} {{ ad_domain }}
+      register: join_result
+      ignore_errors: yes
+      changed_when: join_result.rc == 0
+
+    - name: Configure /etc/sssd/sssd.conf
+      lineinfile:
+        path: /etc/sssd/sssd.conf
+        line: "ad_gpo_access_control = permissive"
+        state: present
+
+    - name: Restart SSSD service
+      service:
+        name: sssd
+        state: restarted
+        enabled: yes
+
+    - name: Enable mkhomedir with pam-auth-update
+      command: pam-auth-update --enable mkhomedir
+      register: pam_result
+      changed_when: pam_result.rc == 0
+
+- name: Join Windows Machines to Active Directory Domain
+  hosts: windows
+  gather_facts: no
+  vars:
+    ad_domain: sherwin.local
+    ad_user: devops
+    ad_password: P@ssw0rd
+    dc_ip: 192.168.2.200
+
+  tasks:
+    - name: Get network adapter name
+      win_shell: "(Get-NetAdapter | Where-Object { $_.Status -eq 'Up' }).Name"
+      register: adapter_name
+
+    - name: Set DNS server to Domain Controller IP
+      win_dns_client:
+        adapter_names: "{{ adapter_name.stdout_lines[0] }}"
+        ipv4_addresses:
+          - "{{ dc_ip }}"
+
+    - name: Join Windows to Active Directory
+      win_domain_membership:
+        dns_domain_name: "{{ ad_domain }}"
+        domain_admin_user: "{{ ad_user }}"
+        domain_admin_password: "{{ ad_password }}"
+        state: domain
+      register: domain_join
+      become: yes
+      become_method: runas
+      become_user: devops
+
+    - name: Force reboot without waiting for WinRM
+      win_shell: shutdown /r /t 5
+      async: 1
+      poll: 0
+      ignore_errors: yes
+
+
+#      This can be use to confirm if the machine can be reached via WinRM
+#    - name: Reboot Windows machine after domain join
+#      win_reboot:
+#      when: domain_join.reboot_required

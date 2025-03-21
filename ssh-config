@@ -1,0 +1,17 @@
+#rename this file to config and save it to .ssh
+Host webserver
+        HostName 192.168.2.157
+        User devops
+        Port 22
+        IdentityFile ~/.ssh/id_rsa
+
+Host testserver
+        HostName 192.168.2.158
+        User devops
+        Port 22
+        IdentityFile ~/.ssh/id_rsa
+
+
+Host win11
+        Hostname 192.168.2.161
+        User    devops
